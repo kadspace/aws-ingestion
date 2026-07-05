@@ -48,7 +48,7 @@ resource "aws_sqs_queue" "readings_dlq" {
 
 resource "aws_sqs_queue" "readings_queue" {
   name                       = "aws-ingestion-readings-queue"
-  visibility_timeout_seconds = 30
+  visibility_timeout_seconds = 90
   message_retention_seconds  = 345600
 
   redrive_policy = jsonencode({
@@ -190,6 +190,13 @@ resource "aws_iam_role_policy" "writer_sqs_dynamodb_policy" {
           "dynamodb:PutItem"
         ]
         Resource = aws_dynamodb_table.readings.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = aws_secretsmanager_secret.discord_webhook.arn
       }
     ]
   })
@@ -204,11 +211,12 @@ resource "aws_lambda_function" "writer" {
 
   source_code_hash = data.archive_file.writer_zip.output_base64sha256
 
-  timeout = 10
+  timeout = 15
 
   environment {
     variables = {
-      TABLE_NAME = aws_dynamodb_table.readings.name
+      TABLE_NAME        = aws_dynamodb_table.readings.name
+      DISCORD_SECRET_ID = aws_secretsmanager_secret.discord_webhook.name
     }
   }
 
@@ -220,7 +228,7 @@ resource "aws_lambda_function" "writer" {
 resource "aws_lambda_event_source_mapping" "readings_queue_to_writer" {
   event_source_arn        = aws_sqs_queue.readings_queue.arn
   function_name           = aws_lambda_function.writer.arn
-  batch_size              = 10
+  batch_size              = 5
   function_response_types = ["ReportBatchItemFailures"]
 }
 
@@ -247,4 +255,13 @@ resource "aws_lambda_permission" "allow_eventbridge_generator" {
   function_name = aws_lambda_function.generator.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.generator_schedule.arn
+}
+
+resource "aws_secretsmanager_secret" "discord_webhook" {
+  name        = "aws-ingestion/discord-webhook"
+  description = "Optional Discord webhook URL for high severity alerts"
+
+  tags = {
+    Project = "aws-ingestion"
+  }
 }
