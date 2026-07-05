@@ -1,8 +1,13 @@
 import json
+import os
 import random
 import uuid
 from datetime import datetime, timezone
 
+import boto3
+
+sqs = boto3.client("sqs")
+QUEUE_URL = os.environ["QUEUE_URL"]
 
 MACHINES = ["machine-001", "machine-002", "machine-003"]
 
@@ -13,12 +18,9 @@ def make_reading(machine_id: str) -> dict:
     pressure = round(random.normalvariate(55, 6), 2)
     rpm = int(random.normalvariate(1750, 120))
 
-    if temperature >= 95 or vibration >= 0.25:
-        severity = "high"
-    elif temperature >= 88 or vibration >= 0.18:
-        severity = "medium"
-    else:
-        severity = "low"
+    severity = "high" if temperature >= 95 or vibration >= 0.25 else (
+        "medium" if temperature >= 88 or vibration >= 0.18 else "low"
+    )
 
     return {
         "reading_id": str(uuid.uuid4()),
@@ -35,12 +37,13 @@ def make_reading(machine_id: str) -> dict:
 def lambda_handler(event, context):
     readings = [make_reading(machine_id) for machine_id in MACHINES]
 
+    for reading in readings:
+        sqs.send_message(
+            QueueUrl=QUEUE_URL,
+            MessageBody=json.dumps(reading),
+        )
+
     return {
-        "statusCode": 200,
-        "body": json.dumps({"readings": readings}),
+        "messages_sent": len(readings),
+        "readings": readings,
     }
-
-
-if __name__ == "__main__":
-    result = lambda_handler({}, None)
-    print(json.dumps(json.loads(result["body"]), indent=2))
