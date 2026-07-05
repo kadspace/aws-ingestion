@@ -223,3 +223,28 @@ resource "aws_lambda_event_source_mapping" "readings_queue_to_writer" {
   batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
 }
+
+resource "aws_cloudwatch_event_rule" "generator_schedule" {
+  name                = "aws-ingestion-generator-schedule"
+  description         = "Runs the generator Lambda on a schedule"
+  schedule_expression = "rate(5 minutes)"
+  state               = "DISABLED"
+
+  tags = {
+    Project = "aws-ingestion"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "generator_schedule_target" {
+  rule      = aws_cloudwatch_event_rule.generator_schedule.name
+  target_id = "aws-ingestion-generator"
+  arn       = aws_lambda_function.generator.arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_generator" {
+  statement_id  = "AllowEventBridgeInvokeGenerator"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.generator.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.generator_schedule.arn
+}
