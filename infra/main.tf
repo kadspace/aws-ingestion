@@ -106,7 +106,7 @@ resource "aws_lambda_function" "generator" {
 
   source_code_hash = data.archive_file.generator_zip.output_base64sha256
 
-  timeout = 10
+  timeout = 30
 
   environment {
     variables = {
@@ -187,7 +187,7 @@ resource "aws_lambda_function" "writer" {
 
   source_code_hash = data.archive_file.writer_zip.output_base64sha256
 
-  timeout = 15
+  timeout = 60
 
   environment {
     variables = {
