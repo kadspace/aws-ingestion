@@ -32,18 +32,10 @@ resource "aws_dynamodb_table" "readings" {
     name = "timestamp"
     type = "S"
   }
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_sqs_queue" "readings_dlq" {
   name = "aws-ingestion-readings-dlq"
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_sqs_queue" "readings_queue" {
@@ -55,10 +47,6 @@ resource "aws_sqs_queue" "readings_queue" {
     deadLetterTargetArn = aws_sqs_queue.readings_dlq.arn
     maxReceiveCount     = 3
   })
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 output "readings_queue_url" {
@@ -86,10 +74,6 @@ resource "aws_iam_role" "generator_lambda_role" {
       }
     ]
   })
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_iam_role_policy_attachment" "generator_basic_execution" {
@@ -129,10 +113,6 @@ resource "aws_lambda_function" "generator" {
       QUEUE_URL = aws_sqs_queue.readings_queue.url
     }
   }
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 data "archive_file" "writer_zip" {
@@ -156,10 +136,6 @@ resource "aws_iam_role" "writer_lambda_role" {
       }
     ]
   })
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_iam_role_policy_attachment" "writer_basic_execution" {
@@ -219,10 +195,6 @@ resource "aws_lambda_function" "writer" {
       DISCORD_SECRET_ID = aws_secretsmanager_secret.discord_webhook.name
     }
   }
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_lambda_event_source_mapping" "readings_queue_to_writer" {
@@ -237,10 +209,6 @@ resource "aws_cloudwatch_event_rule" "generator_schedule" {
   description         = "Runs the generator Lambda on a schedule"
   schedule_expression = "rate(5 minutes)"
   state               = "DISABLED"
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
 
 resource "aws_cloudwatch_event_target" "generator_schedule_target" {
@@ -260,8 +228,4 @@ resource "aws_lambda_permission" "allow_eventbridge_generator" {
 resource "aws_secretsmanager_secret" "discord_webhook" {
   name        = "aws-ingestion/discord-webhook"
   description = "Optional Discord webhook URL for high severity alerts"
-
-  tags = {
-    Project = "aws-ingestion"
-  }
 }
