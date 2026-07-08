@@ -18,9 +18,12 @@ def make_reading(machine_id: str) -> dict:
     pressure = round(random.normalvariate(55, 6), 2)
     rpm = int(random.normalvariate(1750, 120))
 
-    severity = "high" if temperature >= 95 or vibration >= 0.25 else (
-        "medium" if temperature >= 88 or vibration >= 0.18 else "low"
-    )
+    if temperature >= 95 or vibration >= 0.25:
+        severity = "high"
+    elif temperature >= 88 or vibration >= 0.18:
+        severity = "medium"
+    else:
+        severity = "low"
 
     return {
         "reading_id": str(uuid.uuid4()),

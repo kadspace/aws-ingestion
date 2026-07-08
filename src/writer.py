@@ -25,7 +25,11 @@ def get_discord_webhook_url():
         return _cached_discord_webhook_url
 
     try:
-        secret_string = secretsmanager.get_secret_value(SecretId=DISCORD_SECRET_ID).get("SecretString", "").strip()
+        secret_string = (
+            secretsmanager.get_secret_value(SecretId=DISCORD_SECRET_ID)
+            .get("SecretString", "")
+            .strip()
+        )
     except ClientError as e:
         print(f"Discord secret unavailable: {e.response['Error']['Code']}")
         return None
@@ -55,8 +59,17 @@ def send_discord_alert(reading: dict) -> None:
         print("Skipping Discord alert: no webhook configured")
         return
 
-    fields = ("machine_id", "timestamp", "temperature_f", "vibration_mm_s", "pressure_psi", "rpm", "reading_id")
-    message = "\n".join(["High severity machine reading"] + [f"{field}: {reading.get(field)}" for field in fields])
+    fields = (
+        "machine_id",
+        "timestamp",
+        "temperature_f",
+        "vibration_mm_s",
+        "pressure_psi",
+        "rpm",
+        "reading_id",
+    )
+    field_lines = [f"{field}: {reading.get(field)}" for field in fields]
+    message = "\n".join(["High severity machine reading", *field_lines])
     payload = json.dumps({"content": message}).encode("utf-8")
 
     discord_request = request.Request(
