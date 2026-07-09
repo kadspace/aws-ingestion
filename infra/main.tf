@@ -115,6 +115,11 @@ resource "aws_lambda_function" "generator" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "generator" {
+  name              = "/aws/lambda/aws-ingestion-generator"
+  retention_in_days = 7
+}
+
 data "archive_file" "writer_zip" {
   type        = "zip"
   source_file = "${path.module}/../src/writer.py"
@@ -195,6 +200,11 @@ resource "aws_lambda_function" "writer" {
       DISCORD_SECRET_ID = aws_secretsmanager_secret.discord_webhook.name
     }
   }
+}
+
+resource "aws_cloudwatch_log_group" "writer" {
+  name              = "/aws/lambda/aws-ingestion-writer"
+  retention_in_days = 7
 }
 
 resource "aws_lambda_event_source_mapping" "readings_queue_to_writer" {
