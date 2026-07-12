@@ -239,3 +239,30 @@ resource "aws_secretsmanager_secret" "discord_webhook" {
   name        = "aws-ingestion/discord-webhook"
   description = "Optional Discord webhook URL for high severity alerts"
 }
+
+resource "aws_sns_topic" "pipeline_alerts" {
+  name = "aws-ingestion-pipeline-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email_alert" {
+  topic_arn = aws_sns_topic.pipeline_alerts.arn
+  protocol  = "email"
+  endpoint  = "kacperdudz@gmail.com"
+}
+
+resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
+  alarm_name        = "aws-ingestion-dlq-messages"
+  alarm_description = "A message hit the DLQ - 3 real failures on the writer"
+  namespace         = "AWS/SQS"
+  metric_name       = "ApproximateNumberOfMessagesVisible"
+  dimensions = {
+    QueueName = aws_sqs_queue.readings_dlq.name
+  }
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.pipeline_alerts.arn]
+}
