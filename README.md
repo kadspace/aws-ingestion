@@ -135,6 +135,25 @@ Then check:
 - Discord for the alert
 - CloudWatch logs for `/aws/lambda/aws-ingestion-writer`
 
+## Test the DLQ alert
+
+After applying the Terraform and confirming the SNS email subscription, use the same queue lookup as the high-severity test but send malformed JSON:
+
+```powershell
+$queueUrl = aws sqs get-queue-url `
+  --region us-east-1 `
+  --queue-name aws-ingestion-readings-queue `
+  --query QueueUrl `
+  --output text
+
+aws sqs send-message `
+  --region us-east-1 `
+  --queue-url $queueUrl `
+  --message-body 'not-valid-json'
+```
+
+The writer cannot parse this message, so SQS retries it and moves it to the DLQ after three receives. The CloudWatch alarm then publishes to SNS and sends an email. Because of the queue's 90-second visibility timeout and CloudWatch metric evaluation, allow several minutes for the email to arrive.
+
 ## Cost Notes
 
 At the default disabled schedule, the only meaningful standing cost is the Secrets Manager secret, which is roughly cents per day. With the schedule enabled every five minutes, this project is still small enough that Lambda, SQS, and logs should stay within typical free-tier usage for light testing.
