@@ -98,10 +98,7 @@ def lambda_handler(event, context):
 
             table.put_item(
                 Item=reading,
-                ConditionExpression="attribute_not_exists(machine_id) AND attribute_not_exists(#ts)",
-                ExpressionAttributeNames={
-                    "#ts": "timestamp"
-                },
+                ConditionExpression="attribute_not_exists(machine_id)",
             )
 
             print(f"Wrote reading_id={reading.get('reading_id')}")
