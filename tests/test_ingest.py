@@ -1,0 +1,140 @@
+import base64
+import importlib
+import io
+import json
+import os
+import sys
+import unittest
+from contextlib import redirect_stdout
+from unittest.mock import Mock, patch
+
+from botocore.exceptions import ClientError
+
+
+os.environ["QUEUE_URL"] = "https://sqs.example.test/readings"
+
+with patch("boto3.client", return_value=Mock()) as client:
+    sys.modules.pop("src.ingest", None)
+    ingest = importlib.import_module("src.ingest")
+
+
+class IngestHandlerTests(unittest.TestCase):
+    def setUp(self):
+        ingest.sqs.reset_mock(return_value=True, side_effect=True)
+
+    @staticmethod
+    def event(body, content_type="application/json", is_base64_encoded=False):
+        return {
+            "headers": {"content-type": content_type},
+            "body": body,
+            "isBase64Encoded": is_base64_encoded,
+        }
+
+    @staticmethod
+    def valid_reading():
+        return {
+            "machine_id": "machine-007",
+            "temperature_f": 96.0,
+            "vibration_mm_s": 0.1,
+            "pressure_psi": 55.0,
+            "rpm": 1700,
+        }
+
+    def test_valid_reading_is_queued(self):
+        result = ingest.lambda_handler(
+            self.event(json.dumps(self.valid_reading())),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 202)
+        response_body = json.loads(result["body"])
+        self.assertEqual(response_body["status"], "queued")
+        self.assertEqual(response_body["reading"]["severity"], "high")
+        ingest.sqs.send_message.assert_called_once()
+
+        queued = json.loads(ingest.sqs.send_message.call_args.kwargs["MessageBody"])
+        self.assertEqual(queued["machine_id"], "machine-007")
+        self.assertIn("reading_id", queued)
+        self.assertIn("timestamp", queued)
+
+    def test_base64_body_is_supported(self):
+        encoded = base64.b64encode(
+            json.dumps(self.valid_reading()).encode("utf-8")
+        ).decode("ascii")
+
+        result = ingest.lambda_handler(self.event(encoded, is_base64_encoded=True), None)
+
+        self.assertEqual(result["statusCode"], 202)
+
+    def test_invalid_json_returns_400(self):
+        result = ingest.lambda_handler(self.event("not-json"), None)
+
+        self.assertEqual(result["statusCode"], 400)
+        self.assertEqual(
+            json.loads(result["body"])["error"],
+            "request_body_must_be_valid_json",
+        )
+        ingest.sqs.send_message.assert_not_called()
+
+    def test_non_json_content_type_returns_415(self):
+        result = ingest.lambda_handler(
+            self.event(json.dumps(self.valid_reading()), "text/plain"),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 415)
+        ingest.sqs.send_message.assert_not_called()
+
+    def test_invalid_fields_return_structured_422(self):
+        reading = self.valid_reading()
+        reading["rpm"] = -1
+        reading["unexpected"] = "field"
+
+        result = ingest.lambda_handler(self.event(json.dumps(reading)), None)
+
+        self.assertEqual(result["statusCode"], 422)
+        response_body = json.loads(result["body"])
+        self.assertEqual(response_body["error"], "validation_failed")
+        self.assertEqual(
+            {detail["field"] for detail in response_body["details"]},
+            {"rpm", "unexpected"},
+        )
+        ingest.sqs.send_message.assert_not_called()
+
+    def test_array_body_is_rejected(self):
+        result = ingest.lambda_handler(
+            self.event(json.dumps([self.valid_reading()])),
+            None,
+        )
+
+        self.assertEqual(result["statusCode"], 422)
+        ingest.sqs.send_message.assert_not_called()
+
+    def test_timestamp_requires_timezone(self):
+        reading = self.valid_reading()
+        reading["timestamp"] = "2026-07-16T12:00:00"
+
+        result = ingest.lambda_handler(self.event(json.dumps(reading)), None)
+
+        self.assertEqual(result["statusCode"], 422)
+        details = json.loads(result["body"])["details"]
+        self.assertEqual(details[0]["field"], "timestamp")
+
+    def test_queue_failure_returns_503(self):
+        ingest.sqs.send_message.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "try later"}},
+            "SendMessage",
+        )
+
+        with redirect_stdout(io.StringIO()):
+            result = ingest.lambda_handler(
+                self.event(json.dumps(self.valid_reading())),
+                None,
+            )
+
+        self.assertEqual(result["statusCode"], 503)
+        self.assertEqual(json.loads(result["body"])["error"], "queue_unavailable")
+
+
+if __name__ == "__main__":
+    unittest.main()

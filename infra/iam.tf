@@ -36,6 +36,44 @@ resource "aws_iam_role_policy" "generator_sqs_policy" {
   })
 }
 
+resource "aws_iam_role" "ingest_lambda_role" {
+  name = "aws-ingestion-api-ingest-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ingest_basic_execution" {
+  role       = aws_iam_role.ingest_lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "ingest_sqs_policy" {
+  name = "aws-ingestion-api-ingest-sqs-policy"
+  role = aws_iam_role.ingest_lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.readings_queue.arn
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "writer_lambda_role" {
   name = "aws-ingestion-writer-lambda-role"
 

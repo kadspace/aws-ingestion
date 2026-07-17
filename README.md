@@ -8,13 +8,14 @@ The project generates fake machine readings, buffers them through SQS, stores th
 
 ![aws-ingestion architecture](docs/assets/architecture.png)
 
-The main path is intentionally small: EventBridge can trigger a generator Lambda, generated readings are sent as SQS messages, and a writer Lambda persists every reading to DynamoDB. Discord alerts are a side path from the writer Lambda and only run for high-severity readings.
+The main path is intentionally small: EventBridge can trigger a generator Lambda, while API Gateway accepts submitted readings through a separate ingest Lambda. Both paths send one SQS message per reading, and a writer Lambda persists every reading to DynamoDB. Discord alerts are a side path from the writer Lambda and only run for high-severity readings.
 
 The Discord webhook URL is stored in Secrets Manager. It is not hardcoded in the Lambda code, Terraform, or repository.
 
 ## What This Covers
 
 - Scheduled serverless workloads with EventBridge and Lambda
+- HTTP ingestion with API Gateway and Pydantic validation
 - Queue-based decoupling with SQS and a DLQ
 - DynamoDB writes with idempotency checks
 - Secrets Manager for webhook configuration
@@ -23,11 +24,13 @@ The Discord webhook URL is stored in Secrets Manager. It is not hardcoded in the
 
 ## How It Works
 
-1. `aws-ingestion-generator` creates fake machine readings.
-2. Each reading is sent to `aws-ingestion-readings-queue` as a JSON message.
-3. `aws-ingestion-writer` consumes SQS messages in batches.
-4. The writer stores every reading in DynamoDB.
-5. If `severity == "high"`, the writer reads the Discord webhook URL from Secrets Manager and sends an alert.
+1. `aws-ingestion-generator` creates fake machine readings when invoked by EventBridge.
+2. Alternatively, API Gateway sends `POST /readings` requests to `aws-ingestion-api-ingest`.
+3. The ingest Lambda validates one reading with Pydantic, adds server-owned fields, and returns `202 Accepted` after queueing it.
+4. Each reading is sent to `aws-ingestion-readings-queue` as a separate JSON message.
+5. `aws-ingestion-writer` consumes SQS messages in batches.
+6. The writer stores every reading in DynamoDB.
+7. If `severity == "high"`, the writer reads the Discord webhook URL from Secrets Manager and sends an alert.
 
 Example generated reading:
 
@@ -52,6 +55,8 @@ Terraform creates:
 - SQS queue: `aws-ingestion-readings-queue`
 - SQS DLQ: `aws-ingestion-readings-dlq`
 - Generator Lambda: `aws-ingestion-generator`
+- API ingest Lambda: `aws-ingestion-api-ingest`
+- API Gateway HTTP API: `POST /readings`
 - Writer Lambda: `aws-ingestion-writer`
 - EventBridge schedule: disabled by default
 - Secrets Manager secret: `aws-ingestion/discord-webhook`
@@ -64,6 +69,27 @@ From `infra`:
 terraform init
 terraform apply
 ```
+
+Terraform prints the API base URL as `api_endpoint`. Submit one reading with:
+
+```powershell
+$api = terraform output -raw api_endpoint
+
+curl.exe -X POST "$api/readings" `
+  -H "Content-Type: application/json" `
+  --data-binary '{"machine_id":"machine-007","temperature_f":82,"vibration_mm_s":0.1,"pressure_psi":55,"rpm":1700}'
+```
+
+The endpoint accepts exactly one reading per request. Malformed JSON returns `400`, unsupported content types return `415`, invalid fields return a structured `422`, and a successfully queued reading returns `202`.
+
+To exercise the public endpoint and observe its `202` versus `429` responses, run a bounded concurrent test from the repository root:
+
+```powershell
+$api = terraform -chdir=infra output -raw api_endpoint
+python scripts/load_test.py $api --requests 100 --concurrency 10
+```
+
+The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 requests require the explicit `--allow-large-run` flag.
 
 The generator schedule is disabled by default so the project does not keep producing data after a test run.
 
