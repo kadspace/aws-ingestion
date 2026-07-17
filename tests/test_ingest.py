@@ -6,14 +6,18 @@ import os
 import sys
 import unittest
 from contextlib import redirect_stdout
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from botocore.exceptions import ClientError
 
 
 os.environ["QUEUE_URL"] = "https://sqs.example.test/readings"
+os.environ["TABLE_NAME"] = "readings"
 
-with patch("boto3.client", return_value=Mock()) as client:
+with patch("boto3.client", return_value=Mock()), patch(
+    "boto3.resource", return_value=Mock()
+):
     sys.modules.pop("src.ingest", None)
     ingest = importlib.import_module("src.ingest")
 
@@ -21,6 +25,7 @@ with patch("boto3.client", return_value=Mock()) as client:
 class IngestHandlerTests(unittest.TestCase):
     def setUp(self):
         ingest.sqs.reset_mock(return_value=True, side_effect=True)
+        ingest.table.reset_mock(return_value=True, side_effect=True)
 
     @staticmethod
     def event(body, content_type="application/json", is_base64_encoded=False):
@@ -39,6 +44,61 @@ class IngestHandlerTests(unittest.TestCase):
             "pressure_psi": 55.0,
             "rpm": 1700,
         }
+
+    @staticmethod
+    def get_event(query=None):
+        return {
+            "requestContext": {"http": {"method": "GET"}},
+            "queryStringParameters": query,
+        }
+
+    def test_get_readings_queries_machine_in_reverse_time_order(self):
+        ingest.table.query.return_value = {
+            "Items": [
+                {
+                    "machine_id": "machine-007",
+                    "timestamp": "2026-07-16T19:00:00+00:00",
+                    "temperature_f": Decimal("82.5"),
+                }
+            ]
+        }
+
+        result = ingest.lambda_handler(
+            self.get_event({"machine_id": "machine-007", "limit": "10"}), None
+        )
+
+        self.assertEqual(result["statusCode"], 200)
+        body = json.loads(result["body"])
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["readings"][0]["machine_id"], "machine-007")
+        ingest.table.query.assert_called_once_with(
+            KeyConditionExpression="machine_id = :machine_id",
+            ExpressionAttributeValues={":machine_id": "machine-007"},
+            Limit=10,
+            ScanIndexForward=False,
+        )
+
+    def test_get_readings_requires_machine_id(self):
+        result = ingest.lambda_handler(self.get_event(), None)
+
+        self.assertEqual(result["statusCode"], 422)
+        details = json.loads(result["body"])["details"]
+        self.assertEqual(details[0]["field"], "machine_id")
+        ingest.table.query.assert_not_called()
+
+    def test_get_readings_returns_503_when_dynamodb_is_unavailable(self):
+        ingest.table.query.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "try later"}},
+            "Query",
+        )
+
+        with redirect_stdout(io.StringIO()):
+            result = ingest.lambda_handler(
+                self.get_event({"machine_id": "machine-007"}), None
+            )
+
+        self.assertEqual(result["statusCode"], 503)
+        self.assertEqual(json.loads(result["body"])["error"], "readings_unavailable")
 
     def test_valid_reading_is_queued(self):
         result = ingest.lambda_handler(

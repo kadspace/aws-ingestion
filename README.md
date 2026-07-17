@@ -25,7 +25,7 @@ The Discord webhook URL is stored in Secrets Manager. It is not hardcoded in the
 ## How It Works
 
 1. `aws-ingestion-generator` creates fake machine readings when invoked by EventBridge.
-2. Alternatively, API Gateway sends `POST /readings` requests to `aws-ingestion-api-ingest`.
+2. Alternatively, API Gateway sends `POST /readings` and `GET /readings` requests to `aws-ingestion-api-ingest`.
 3. The ingest Lambda validates one reading with Pydantic, adds server-owned fields, and returns `202 Accepted` after queueing it.
 4. Each reading is sent to `aws-ingestion-readings-queue` as a separate JSON message.
 5. `aws-ingestion-writer` consumes SQS messages in batches.
@@ -56,7 +56,7 @@ Terraform creates:
 - SQS DLQ: `aws-ingestion-readings-dlq`
 - Generator Lambda: `aws-ingestion-generator`
 - API ingest Lambda: `aws-ingestion-api-ingest`
-- API Gateway HTTP API: `POST /readings`
+- API Gateway HTTP API: `POST /readings`, `GET /readings`
 - Writer Lambda: `aws-ingestion-writer`
 - EventBridge schedule: disabled by default
 - Secrets Manager secret: `aws-ingestion/discord-webhook`
@@ -81,6 +81,14 @@ curl.exe -X POST "$api/readings" `
 ```
 
 The endpoint accepts exactly one reading per request. Malformed JSON returns `400`, unsupported content types return `415`, invalid fields return a structured `422`, and a successfully queued reading returns `202`.
+
+Read the newest stored readings for one machine with:
+
+```powershell
+curl.exe "$api/readings?machine_id=machine-007&limit=25"
+```
+
+`machine_id` is required. `limit` defaults to 25 and accepts values from 1 through 100. Results are ordered newest first by event-time `timestamp`. The route uses the table's existing `(machine_id, timestamp)` key with a DynamoDB query; it does not scan the table or add an index.
 
 ## Retries and idempotency
 

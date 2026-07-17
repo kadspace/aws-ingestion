@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
@@ -10,8 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 
 sqs = boto3.client("sqs")
+dynamodb = boto3.resource("dynamodb")
 
 QUEUE_URL = os.environ["QUEUE_URL"]
+TABLE_NAME = os.environ["TABLE_NAME"]
+table = dynamodb.Table(TABLE_NAME)
 
 
 class ReadingRequest(BaseModel):
@@ -32,6 +36,13 @@ class ReadingRequest(BaseModel):
         return value
 
 
+class ReadingQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    machine_id: str = Field(min_length=1, max_length=100)
+    limit: int = Field(default=25, ge=1, le=100)
+
+
 def derive_severity(temperature: float, vibration: float) -> str:
     if temperature >= 95 or vibration >= 0.25:
         return "high"
@@ -44,8 +55,14 @@ def response(status_code: int, body: dict) -> dict:
     return {
         "statusCode": status_code,
         "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(body),
+        "body": json.dumps(body, default=json_default),
     }
+
+
+def json_default(value):
+    if isinstance(value, Decimal):
+        return int(value) if value % 1 == 0 else float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def validation_details(error: ValidationError) -> list[dict]:
@@ -59,7 +76,31 @@ def validation_details(error: ValidationError) -> list[dict]:
     ]
 
 
-def lambda_handler(event, context):
+def get_readings(event):
+    try:
+        query = ReadingQuery.model_validate(event.get("queryStringParameters") or {})
+    except ValidationError as error:
+        return response(
+            422,
+            {"error": "validation_failed", "details": validation_details(error)},
+        )
+
+    try:
+        result = table.query(
+            KeyConditionExpression="machine_id = :machine_id",
+            ExpressionAttributeValues={":machine_id": query.machine_id},
+            Limit=query.limit,
+            ScanIndexForward=False,
+        )
+    except ClientError as error:
+        print(f"Failed to read readings: {error.response['Error']['Code']}")
+        return response(503, {"error": "readings_unavailable"})
+
+    readings = result.get("Items", [])
+    return response(200, {"readings": readings, "count": len(readings)})
+
+
+def post_reading(event):
     headers = {key.lower(): value for key, value in (event.get("headers") or {}).items()}
     content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
 
@@ -113,3 +154,13 @@ def lambda_handler(event, context):
         return response(503, {"error": "queue_unavailable"})
 
     return response(202, {"status": "queued", "reading": reading})
+
+
+def lambda_handler(event, context):
+    method = event.get("requestContext", {}).get("http", {}).get("method", "POST")
+
+    if method == "GET":
+        return get_readings(event)
+    if method == "POST":
+        return post_reading(event)
+    return response(405, {"error": "method_not_allowed"})

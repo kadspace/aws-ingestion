@@ -74,6 +74,22 @@ resource "aws_iam_role_policy" "ingest_sqs_policy" {
   })
 }
 
+resource "aws_iam_role_policy" "ingest_dynamodb_policy" {
+  name = "aws-ingestion-api-ingest-dynamodb-policy"
+  role = aws_iam_role.ingest_lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:Query"]
+        Resource = aws_dynamodb_table.readings.arn
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "writer_lambda_role" {
   name = "aws-ingestion-writer-lambda-role"
 

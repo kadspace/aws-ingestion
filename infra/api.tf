@@ -22,7 +22,8 @@ resource "aws_lambda_function" "ingest" {
 
   environment {
     variables = {
-      QUEUE_URL = aws_sqs_queue.readings_queue.url
+      QUEUE_URL  = aws_sqs_queue.readings_queue.url
+      TABLE_NAME = aws_dynamodb_table.readings.name
     }
   }
 }
@@ -50,6 +51,12 @@ resource "aws_apigatewayv2_route" "post_readings" {
   target    = "integrations/${aws_apigatewayv2_integration.ingest.id}"
 }
 
+resource "aws_apigatewayv2_route" "get_readings" {
+  api_id    = aws_apigatewayv2_api.ingest.id
+  route_key = "GET /readings"
+  target    = "integrations/${aws_apigatewayv2_integration.ingest.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.ingest.id
   name        = "$default"
@@ -69,4 +76,12 @@ resource "aws_lambda_permission" "allow_apigateway_ingest" {
   function_name = aws_lambda_function.ingest.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.ingest.execution_arn}/*/POST/readings"
+}
+
+resource "aws_lambda_permission" "allow_apigateway_readings" {
+  statement_id  = "AllowApiGatewayReadings"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ingest.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.ingest.execution_arn}/*/GET/readings"
 }
