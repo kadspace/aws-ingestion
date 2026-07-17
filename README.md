@@ -10,43 +10,6 @@ The project generates fake machine readings, buffers them through SQS, stores th
 
 The main path is intentionally small: EventBridge can trigger a generator Lambda, while API Gateway accepts submitted readings through a separate ingest Lambda. Both paths send one SQS message per reading, and a writer Lambda persists every reading to DynamoDB. Discord alerts are a side path from the writer Lambda and only run for high-severity readings.
 
-The Discord webhook URL is stored in Secrets Manager. It is not hardcoded in the Lambda code, Terraform, or repository.
-
-## What This Covers
-
-- Scheduled serverless workloads with EventBridge and Lambda
-- HTTP ingestion with API Gateway and Pydantic validation
-- Queue-based decoupling with SQS and a DLQ
-- DynamoDB writes with idempotency checks
-- Secrets Manager for webhook configuration
-- Best-effort external alerts that do not break ingestion
-- Terraform-managed AWS infrastructure
-
-## How It Works
-
-1. `aws-ingestion-generator` creates fake machine readings when invoked by EventBridge.
-2. Alternatively, API Gateway sends `POST /readings` and `GET /readings` requests to `aws-ingestion-api-ingest`.
-3. The ingest Lambda validates one reading with Pydantic, adds server-owned fields, and returns `202 Accepted` after queueing it.
-4. Each reading is sent to `aws-ingestion-readings-queue` as a separate JSON message.
-5. `aws-ingestion-writer` consumes SQS messages in batches.
-6. The writer stores every reading in DynamoDB.
-7. If `severity == "high"`, the writer reads the Discord webhook URL from Secrets Manager and sends an alert.
-
-Example generated reading:
-
-```json
-{
-  "reading_id": "discord-test-001",
-  "machine_id": "machine-999",
-  "timestamp": "2026-07-05T21:10:00Z",
-  "temperature_f": 101.5,
-  "vibration_mm_s": 0.31,
-  "pressure_psi": 59.2,
-  "rpm": 1880,
-  "severity": "high"
-}
-```
-
 ## AWS Resources
 
 Terraform creates:
@@ -80,7 +43,7 @@ curl.exe -X POST "$api/readings" `
   --data-binary '{"machine_id":"machine-007","timestamp":"2026-07-16T19:00:00Z","temperature_f":82,"vibration_mm_s":0.1,"pressure_psi":55,"rpm":1700}'
 ```
 
-The endpoint accepts exactly one reading per request. Malformed JSON returns `400`, unsupported content types return `415`, invalid fields return a structured `422`, and a successfully queued reading returns `202`.
+A queued reading returns `202`; malformed or invalid requests return `400`, `415`, or `422`.
 
 Read the newest stored readings for one machine with:
 
@@ -88,50 +51,42 @@ Read the newest stored readings for one machine with:
 curl.exe "$api/readings?machine_id=machine-007&limit=25"
 ```
 
-`machine_id` is required. `limit` defaults to 25 and accepts values from 1 through 100. Results are ordered newest first by event-time `timestamp`. The route uses the table's existing `(machine_id, timestamp)` key with a DynamoDB query; it does not scan the table or add an index.
+`machine_id` is required; `limit` accepts 1 through 100 (default 25). Results are ordered newest first.
 
-## Retries and idempotency
+## Data model
 
-The DynamoDB primary key is the natural key `(machine_id, timestamp)`. Clients retry a logical reading by sending the same `machine_id` and event-time `timestamp` again. Both API calls return `202` because that response means the message was accepted into SQS; the writer stores the first message and logs/skips the duplicate when its conditional write finds that natural key already present.
+Example reading:
 
-This is intentionally first-write-wins. Reusing the same natural key with a different payload silently keeps the first stored reading. `reading_id` is generated for traceability and is not the deduplication key.
+```json
+{
+  "reading_id": "discord-test-001",
+  "machine_id": "machine-999",
+  "timestamp": "2026-07-05T21:10:00Z",
+  "temperature_f": 101.5,
+  "vibration_mm_s": 0.31,
+  "pressure_psi": 59.2,
+  "rpm": 1880,
+  "severity": "high"
+}
+```
 
-## Timestamps
+The DynamoDB key is the natural key `(machine_id, timestamp)` and writes are first-write-wins: a retried reading returns `202` again (the API's `202` means "accepted into SQS"), and the writer's conditional write skips the duplicate. `timestamp` is event time supplied by the client, defaulted to the current time if omitted; the ingest Lambda also adds a server-owned `ingested_at`, so the gap between the two shows device buffering or pipeline lag. `reading_id` exists for traceability and is not the deduplication key.
 
-For API submissions, `timestamp` is event time: when the client measured the reading. Real clients should always send it with a timezone. If it is omitted, the ingest Lambda defaults it to the current time as a toy-app fallback.
+## Tests
 
-The ingest Lambda also adds `ingested_at`, a server-controlled UTC timestamp recording when the API accepted the reading. Clients cannot set this field. The difference between `timestamp` and `ingested_at` is a useful signal for device buffering, retry delay, and pipeline lag.
-
-The scheduled generator path remains unchanged: its generated `timestamp` is effectively both event and ingest time, and its messages do not include `ingested_at`.
-
-To exercise the public endpoint and observe its `202` versus `429` responses, run a bounded concurrent test from the repository root:
+The `tests` directory contains unit tests for the ingest and writer Lambdas with AWS calls mocked. Run them from the repository root:
 
 ```powershell
-$api = terraform -chdir=infra output -raw api_endpoint
-python scripts/load_test.py $api --requests 100 --concurrency 10 --simulate-retries 10
+python -m unittest discover -s tests -v
 ```
 
-`--simulate-retries 10` sends 10 percent of the logical readings twice with identical `(machine_id, timestamp)` values. When both attempts return `202`, the expected result is one DynamoDB item for that natural key. Under concurrent load, the configured API throttle can return `429`, which means that attempt was not queued. The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 total HTTP requests require the explicit `--allow-large-run` flag.
+## Scheduled generation
 
-The generator schedule is disabled by default so the project does not keep producing data after a test run.
-
-To run it on a timer, change the EventBridge rule state in `infra/main.tf`:
-
-```hcl
-state = "ENABLED"
-```
-
-Then apply:
-
-```powershell
-terraform apply
-```
-
-Switch it back to `DISABLED` and apply again when testing is done.
+The EventBridge schedule is disabled by default so the project does not keep producing data. To run the generator on a timer, set `state = "ENABLED"` on the rule in `infra/main.tf` and `terraform apply`; switch it back to `DISABLED` and apply again when done.
 
 ## Discord alerts
 
-Set the webhook secret after Terraform creates the secret:
+Set the webhook secret after Terraform creates it:
 
 ```powershell
 aws secretsmanager put-secret-value `
@@ -140,25 +95,7 @@ aws secretsmanager put-secret-value `
   --secret-string "https://discord.com/api/webhooks/..."
 ```
 
-The writer accepts either a raw webhook URL:
-
-```text
-https://discord.com/api/webhooks/...
-```
-
-or a JSON object:
-
-```json
-{"url":"https://discord.com/api/webhooks/..."}
-```
-
-Only high-severity readings send Discord alerts. Alert failures are logged, but they do not fail the ingestion path.
-
-That means this still succeeds even if Discord has a temporary issue:
-
-```text
-SQS message -> writer Lambda -> DynamoDB write
-```
+The secret can be a raw webhook URL or a JSON object like `{"url":"..."}`. Only high-severity readings trigger an alert, and alert failures are logged without failing ingestion.
 
 ## Test a high-severity alert
 
@@ -177,33 +114,11 @@ aws sqs send-message `
   --message-body '{"reading_id":"discord-test-001","machine_id":"machine-999","timestamp":"2026-07-05T21:10:00Z","temperature_f":101.5,"vibration_mm_s":0.31,"pressure_psi":59.2,"rpm":1880,"severity":"high"}'
 ```
 
-Then check:
+Then check DynamoDB for the inserted reading, Discord for the alert, and the CloudWatch logs for `/aws/lambda/aws-ingestion-writer`.
 
-- DynamoDB for the inserted reading
-- Discord for the alert
-- CloudWatch logs for `/aws/lambda/aws-ingestion-writer`
+## Cost and cleanup
 
-## Cost Notes
-
-At the default disabled schedule, the only meaningful standing cost is the Secrets Manager secret, which is roughly cents per day. With the schedule enabled every five minutes, this project is still small enough that Lambda, SQS, and logs should stay within typical free-tier usage for light testing.
-
-The schedule should still be disabled when it is not being tested.
-
-## Cleanup
-
-Disable the schedule before walking away:
-
-```hcl
-state = "DISABLED"
-```
-
-Then apply:
-
-```powershell
-terraform apply
-```
-
-To remove the AWS resources:
+Leave the schedule `DISABLED` whenever you are not actively testing — it is the one thing that keeps generating readings and costs. With the schedule disabled, the only meaningful standing cost is the Secrets Manager secret, roughly cents per day; light testing keeps Lambda, SQS, and logs within typical free-tier usage. Remove the AWS resources with:
 
 ```powershell
 terraform destroy

@@ -103,6 +103,13 @@ def main() -> None:
         f"({http_request_count / elapsed:.2f} HTTP RPS)"
     )
     print(f"Statuses: {dict(sorted(statuses.items()))} (0 means client/network error)")
+    if statuses.get(429):
+        print("429 responses were rejected by API Gateway throttling.")
+    if statuses.get(503):
+        print(
+            "503 responses mean the Lambda integration was unavailable; "
+            "check the ingest Lambda Throttles metric and logs."
+        )
     print(
         "Latency: "
         f"mean={statistics.mean(latencies) * 1000:.1f}ms "

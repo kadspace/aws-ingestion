@@ -17,8 +17,9 @@ resource "aws_dynamodb_table" "readings" {
 }
 
 resource "aws_secretsmanager_secret" "discord_webhook" {
-  name        = "aws-ingestion/discord-webhook"
-  description = "Optional Discord webhook URL for high severity alerts"
+  name                    = "aws-ingestion/discord-webhook"
+  description             = "Optional Discord webhook URL for high severity alerts"
+  recovery_window_in_days = 0
 }
 
 resource "aws_sqs_queue" "readings_dlq" {
