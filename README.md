@@ -118,7 +118,7 @@ Then check DynamoDB for the inserted reading, Discord for the alert, and the Clo
 
 ## Cost and cleanup
 
-With the schedule disabled, the only meaningful standing cost is the Secrets Manager secret, roughly cents per day; light testing keeps Lambda, SQS, and logs within typical free-tier usage. Remove the AWS resources with:
+Leave the schedule `DISABLED` whenever you are not actively testing — it is the one thing that keeps generating readings and costs. With the schedule disabled, the only meaningful standing cost is the Secrets Manager secret, roughly cents per day; light testing keeps Lambda, SQS, and logs within typical free-tier usage. Remove the AWS resources with:
 
 ```powershell
 terraform destroy
