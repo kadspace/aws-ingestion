@@ -19,3 +19,7 @@ provider "aws" {
 output "readings_queue_url" {
   value = aws_sqs_queue.readings_queue.url
 }
+
+output "api_endpoint" {
+  value = aws_apigatewayv2_api.ingest.api_endpoint
+}
