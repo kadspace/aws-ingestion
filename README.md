@@ -108,10 +108,20 @@ To exercise the public endpoint and observe its `202` versus `429` responses, ru
 
 ```powershell
 $api = terraform -chdir=infra output -raw api_endpoint
-python scripts/load_test.py $api --requests 100 --concurrency 10 --simulate-retries 10
+python tests/load_test.py $api --requests 100 --concurrency 10 --simulate-retries 10
 ```
 
 `--simulate-retries 10` sends 10 percent of the logical readings twice with identical `(machine_id, timestamp)` values. When both attempts return `202`, the expected result is one DynamoDB item for that natural key. Under concurrent load, the configured API throttle can return `429`, which means that attempt was not queued. The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 total HTTP requests require the explicit `--allow-large-run` flag.
+
+## Tests
+
+The `tests` directory keeps all verification code in one place. `test_ingest.py` and `test_writer.py` are isolated unit tests that mock AWS calls. `load_test.py` is a manually run live test against a deployed API and intentionally lacks the `test_` prefix, so unit-test discovery does not execute it.
+
+Run the unit tests from the repository root:
+
+```powershell
+python -m unittest discover -s tests -v
+```
 
 The generator schedule is disabled by default so the project does not keep producing data after a test run.
 
