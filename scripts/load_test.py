@@ -111,7 +111,7 @@ def main() -> None:
     )
     if retry_count:
         print(
-            "Expected persistence: one DynamoDB item per logical reading; "
+            "Expected for natural keys accepted with 202: one DynamoDB item; "
             "duplicate natural keys are skipped by the writer."
         )
 

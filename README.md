@@ -103,7 +103,7 @@ $api = terraform -chdir=infra output -raw api_endpoint
 python scripts/load_test.py $api --requests 100 --concurrency 10 --simulate-retries 10
 ```
 
-`--simulate-retries 10` sends 10 percent of the logical readings twice with identical `(machine_id, timestamp)` values. Each duplicate can receive `202`, but the expected result is one DynamoDB item per logical reading. The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 total HTTP requests require the explicit `--allow-large-run` flag.
+`--simulate-retries 10` sends 10 percent of the logical readings twice with identical `(machine_id, timestamp)` values. When both attempts return `202`, the expected result is one DynamoDB item for that natural key. Under concurrent load, the configured API throttle can return `429`, which means that attempt was not queued. The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 total HTTP requests require the explicit `--allow-large-run` flag.
 
 The generator schedule is disabled by default so the project does not keep producing data after a test run.
 
