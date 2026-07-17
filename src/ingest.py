@@ -89,11 +89,13 @@ def lambda_handler(event, context):
             },
         )
 
-    timestamp = submitted.timestamp or datetime.now(timezone.utc)
+    ingested_at = datetime.now(timezone.utc)
+    timestamp = submitted.timestamp or ingested_at
     reading = {
         "reading_id": str(uuid.uuid4()),
         "machine_id": submitted.machine_id,
         "timestamp": timestamp.astimezone(timezone.utc).isoformat(),
+        "ingested_at": ingested_at.isoformat(),
         "temperature_f": submitted.temperature_f,
         "vibration_mm_s": submitted.vibration_mm_s,
         "pressure_psi": submitted.pressure_psi,

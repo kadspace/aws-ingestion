@@ -77,19 +77,33 @@ $api = terraform output -raw api_endpoint
 
 curl.exe -X POST "$api/readings" `
   -H "Content-Type: application/json" `
-  --data-binary '{"machine_id":"machine-007","temperature_f":82,"vibration_mm_s":0.1,"pressure_psi":55,"rpm":1700}'
+  --data-binary '{"machine_id":"machine-007","timestamp":"2026-07-16T19:00:00Z","temperature_f":82,"vibration_mm_s":0.1,"pressure_psi":55,"rpm":1700}'
 ```
 
 The endpoint accepts exactly one reading per request. Malformed JSON returns `400`, unsupported content types return `415`, invalid fields return a structured `422`, and a successfully queued reading returns `202`.
+
+## Retries and idempotency
+
+The DynamoDB primary key is the natural key `(machine_id, timestamp)`. Clients retry a logical reading by sending the same `machine_id` and event-time `timestamp` again. Both API calls return `202` because that response means the message was accepted into SQS; the writer stores the first message and logs/skips the duplicate when its conditional write finds that natural key already present.
+
+This is intentionally first-write-wins. Reusing the same natural key with a different payload silently keeps the first stored reading. `reading_id` is generated for traceability and is not the deduplication key.
+
+## Timestamps
+
+For API submissions, `timestamp` is event time: when the client measured the reading. Real clients should always send it with a timezone. If it is omitted, the ingest Lambda defaults it to the current time as a toy-app fallback.
+
+The ingest Lambda also adds `ingested_at`, a server-controlled UTC timestamp recording when the API accepted the reading. Clients cannot set this field. The difference between `timestamp` and `ingested_at` is a useful signal for device buffering, retry delay, and pipeline lag.
+
+The scheduled generator path remains unchanged: its generated `timestamp` is effectively both event and ingest time, and its messages do not include `ingested_at`.
 
 To exercise the public endpoint and observe its `202` versus `429` responses, run a bounded concurrent test from the repository root:
 
 ```powershell
 $api = terraform -chdir=infra output -raw api_endpoint
-python scripts/load_test.py $api --requests 100 --concurrency 10
+python scripts/load_test.py $api --requests 100 --concurrency 10 --simulate-retries 10
 ```
 
-The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 requests require the explicit `--allow-large-run` flag.
+`--simulate-retries 10` sends 10 percent of the logical readings twice with identical `(machine_id, timestamp)` values. Each duplicate can receive `202`, but the expected result is one DynamoDB item per logical reading. The script sends low-severity readings so it does not intentionally trigger Discord alerts. API Gateway throttling is best-effort, and accepted requests create real SQS messages and DynamoDB writes. Runs above 10,000 total HTTP requests require the explicit `--allow-large-run` flag.
 
 The generator schedule is disabled by default so the project does not keep producing data after a test run.
 

@@ -56,6 +56,51 @@ class IngestHandlerTests(unittest.TestCase):
         self.assertEqual(queued["machine_id"], "machine-007")
         self.assertIn("reading_id", queued)
         self.assertIn("timestamp", queued)
+        self.assertIn("ingested_at", queued)
+
+    def test_explicit_timestamp_is_preserved_as_event_time(self):
+        reading = self.valid_reading()
+        reading["timestamp"] = "2026-07-16T12:00:00-07:00"
+
+        result = ingest.lambda_handler(self.event(json.dumps(reading)), None)
+
+        self.assertEqual(result["statusCode"], 202)
+        queued = json.loads(ingest.sqs.send_message.call_args.kwargs["MessageBody"])
+        self.assertEqual(queued["timestamp"], "2026-07-16T19:00:00+00:00")
+        self.assertIn("ingested_at", queued)
+        self.assertNotEqual(queued["timestamp"], queued["ingested_at"])
+
+    def test_retry_queues_the_same_natural_key_twice(self):
+        reading = self.valid_reading()
+        reading["timestamp"] = "2026-07-16T19:00:00Z"
+        event = self.event(json.dumps(reading))
+
+        first = ingest.lambda_handler(event, None)
+        second = ingest.lambda_handler(event, None)
+
+        self.assertEqual(first["statusCode"], 202)
+        self.assertEqual(second["statusCode"], 202)
+        queued = [
+            json.loads(call.kwargs["MessageBody"])
+            for call in ingest.sqs.send_message.call_args_list
+        ]
+        self.assertEqual(len(queued), 2)
+        self.assertEqual(
+            (queued[0]["machine_id"], queued[0]["timestamp"]),
+            (queued[1]["machine_id"], queued[1]["timestamp"]),
+        )
+        self.assertNotEqual(queued[0]["reading_id"], queued[1]["reading_id"])
+
+    def test_client_cannot_set_ingested_at(self):
+        reading = self.valid_reading()
+        reading["ingested_at"] = "2026-07-16T19:00:00Z"
+
+        result = ingest.lambda_handler(self.event(json.dumps(reading)), None)
+
+        self.assertEqual(result["statusCode"], 422)
+        details = json.loads(result["body"])["details"]
+        self.assertEqual(details[0]["field"], "ingested_at")
+        ingest.sqs.send_message.assert_not_called()
 
     def test_base64_body_is_supported(self):
         encoded = base64.b64encode(
