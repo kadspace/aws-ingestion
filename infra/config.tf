@@ -23,3 +23,8 @@ output "readings_queue_url" {
 output "api_endpoint" {
   value = aws_apigatewayv2_api.ingest.api_endpoint
 }
+
+variable "alert_email" {
+  description = "Email address subscribed to the pipeline alerts SNS topic."
+  type        = string
+}

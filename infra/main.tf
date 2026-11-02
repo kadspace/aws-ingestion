@@ -129,7 +129,7 @@ resource "aws_sns_topic" "pipeline_alerts" {
 resource "aws_sns_topic_subscription" "email_alert" {
   topic_arn = aws_sns_topic.pipeline_alerts.arn
   protocol  = "email"
-  endpoint  = "kacperdudz@gmail.com"
+  endpoint  = var.alert_email
 }
 
 resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
