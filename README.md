@@ -26,7 +26,7 @@ Terraform creates:
 
 ## Deploy
 
-From `infra`:
+From `infra`, copy `terraform.tfvars.example` to `terraform.tfvars` and set `alert_email` to the address that should get DLQ alerts (`*.tfvars` is gitignored). Then:
 
 ```powershell
 terraform init
